@@ -23,3 +23,9 @@
 *.code-workspace
 .history
 .ionide
+
+
+.DS_Store
+/checkpoints
+__pycache__/
+.ipynb_checkpoints

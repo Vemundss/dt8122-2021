@@ -1,6 +1,6 @@
 """
 Implementation of the SWAG-algorithm, as described in the paper:
-'A Simple Baseline for Bayesian Uncertainty in Deep Learning' J. Maddox et al.
+'A Simple Baseline for Bayesian Uncertainty in Deep Learning' J. Maddox et al. (2019)
 """
 import numpy as np
 import torch
@@ -202,18 +202,22 @@ def sample_posterior_swag(theta_SWA, cov_diag, D):
 
     posterior_sample = copy.deepcopy(theta_SWA)
     cumNs = np.cumsum(Ns)
-    idx = 0
     for i, (key, value) in enumerate(theta_SWA.items()):
         # D is originally a list of OrderedDicts. Restructure to correctly
         # shaped torch.tensors
-        layer_DT = [torch.flatten(d[key]) for d in D] # shape: (K,Ns[i])
-        layer_D = torch.stack(layer_DT,axis=-1) # shape: (Ns[i],K)
+        layer_DT = [torch.flatten(d[key]) for d in D]  # shape: (K,Ns[i])
+        layer_D = torch.stack(layer_DT, axis=-1)  # shape: (Ns[i],K)
 
         # reshape scaled samples to weight shapes
-        z1_tmp = 1/np.sqrt(2) * torch.flatten(torch.sqrt(cov_diag[key])) * z1[cumNs[i]:cumNs[i+1]]
+        z1_tmp = (
+            1
+            / np.sqrt(2)
+            * torch.flatten(torch.sqrt(cov_diag[key]))
+            * z1[cumNs[i] : cumNs[i + 1]]
+        )
         z1_tmp = z1_tmp.reshape(posterior_sample[key].shape)
 
-        z2_tmp = 1 / np.sqrt(2*K) * layer_D @ z2 # per "layer"
+        z2_tmp = 1 / np.sqrt(2 * K) * layer_D @ z2  # per "layer"
         z2_tmp = z2_tmp.reshape(posterior_sample[key].shape)
 
         posterior_sample[key] = posterior_sample[key] + z1_tmp + z2_tmp
@@ -221,18 +225,31 @@ def sample_posterior_swag(theta_SWA, cov_diag, D):
     return posterior_sample
 
 
+def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9):
+    """
+    Calculate prediction intervals using monte carlo.
 
+    The method can be summarized as:
+        - Sample weights
+        - Do predictions: y_preds
+        - Sort predictions
+        - Choose predictions at percentile-indices
+    """
+    # Forward x nsamples times with different sampled weights
+    y_preds = []
+    for i in range(nsamples):
+        # sample weights and add those weights to the model
+        weights = sample_posterior_swag(theta_SWA, cov_diag, D)
+        model.load_state_dict(sample_posterior_swag(theta_SWA, cov_diag, D))
 
+        # do prediction with current (wrt. weights) model
+        y_preds.append(model(x).detach().numpy())
+    y_preds = np.array(y_preds)
 
+    # sort a long sample-dimension
+    y_preds = np.sort(y_preds, axis=0)
 
+    idx_percentile = round(percentile * nsamples)
+    lower_pi, upper_pi = y_preds[idx_percentile], y_preds[-idx_percentile]
 
-
-
-
-
-
-
-
-
-
-
+    return lower_pi, upper_pi, np.mean(y_preds, axis=0)

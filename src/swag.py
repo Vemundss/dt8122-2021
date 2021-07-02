@@ -6,11 +6,12 @@ import numpy as np
 import torch
 import tqdm
 
+import sys
 import os
 import copy
 import operator
 
-from methods import torch_weight_operation
+from methods import ordereddict2tensor, tensor2ordereddict
 
 
 def train_swag(
@@ -75,7 +76,7 @@ def train_swag(
     # Continue training and saving (nsamples) new weights from initial weights
     # ---------
     print(
-        "Iterate/train further from initial weight-solution ('Sample' posterior mode)"
+        "Iterate/train further from initial weight-solution ('Sample' around posterior mode)"
     )
     for weight_sample in tqdm.trange(nsamples):
         loss_history = []
@@ -123,7 +124,7 @@ def inference_swag(name, checkpoint_path="../checkpoints/"):
         name: (str) common checkpoint name, e.g. 'yacht'
         checkpoint_path: (str) path to checkpoints
     """
-    weights = []
+    tweights = []
     onlyfiles = [
         f
         for f in os.listdir(checkpoint_path)
@@ -131,55 +132,21 @@ def inference_swag(name, checkpoint_path="../checkpoints/"):
     ]
     for file in onlyfiles:
         if name in file:
-            weights.append(torch.load(checkpoint_path + file)["model_state_dict"])
+            odict = torch.load(checkpoint_path + file)["model_state_dict"]
+            tweight = ordereddict2tensor(odict)
+            tweights.append(tweight)
 
-    # initialise inference quantities
-    theta_SWA = copy.deepcopy(weights[0])
-    theta_second_moment = torch_weight_operation(
-        theta_SWA, theta_SWA, operator.mul, deepcopy=True
-    )
-    # sum all weights
-    for weight in weights[1:]:
-        theta_SWA = torch_weight_operation(
-            theta_SWA, weight, operator.add, deepcopy=False
-        )
+    if len(tweights) == 0:
+        raise Exception(
+            f"{e}. The weights at <{checkpoint_path + name}> does not exist. TRAIN first!"
+        ) from None
 
-        weight_squared = torch_weight_operation(
-            weight, weight, operator.mul, deepcopy=True
-        )
-        theta_second_moment = torch_weight_operation(
-            theta_second_moment, weight_squared, operator.add, deepcopy=False
-        )
-
-    # rescale (i.e. mean vs. sum)
-    theta_SWA = torch_weight_operation(
-        theta_SWA, len(weights), operator.truediv, deepcopy=False
-    )
-    theta_second_moment = torch_weight_operation(
-        theta_second_moment, len(weights), operator.truediv, deepcopy=False
-    )
-
-    cov_diag = torch_weight_operation(
-        theta_second_moment,
-        torch_weight_operation(theta_SWA, theta_SWA, operator.mul, deepcopy=True),
-        operator.sub,
-        deepcopy=True,
-    )
-
-    # Calculate low-rank approximate sample covariance
-    # NOTE! We have access to theta_SWA, and thus use this to calculate the
-    # columns of D, rather than the running average - as they do.
-    # This will naturally lead to a better estimate of D - which we do not
-    # complain about :) - this works because we have few explanatory variables
-    # in our dataset, and because our models are relatively small (few parameters)
-    D = []
-    for weight in weights:
-        # we do not need the RAM-loaded weights anymore, so we can overwrite them,
-        # i.e., we do not need deepcopy.
-        D.append(
-            torch_weight_operation(weight, theta_SWA, operator.sub, deepcopy=False)
-        )
-
+    # do inference
+    tweights = torch.stack(tweights)
+    theta_SWA = torch.mean(tweights, axis=0)
+    theta_second_moment = torch.mean(tweights ** 2, axis=0)
+    cov_diag = theta_second_moment - theta_SWA ** 2
+    D = tweights - theta_SWA
     return theta_SWA, cov_diag, D
 
 
@@ -188,40 +155,12 @@ def sample_posterior_swag(theta_SWA, cov_diag, D):
     Sample the inferred approximate posterior distribution found by SWAG,
     as specified by Equation (1) in their article.
     """
-    # calculate total amount of weights in the torch.nn.Module
-    Ns = [0]
-    for tensor in theta_SWA.values():
-        Ns.append(np.prod(tensor.shape))
-    N = sum(Ns)
+    z1 = torch.normal(torch.zeros(theta_SWA.shape), 1)
+    z2 = torch.normal(torch.zeros(D.shape[0]), 1)
 
-    # amount of columns in D (low-rank)
-    K = len(D)
-
-    z1 = torch.normal(torch.zeros(N), 1)
-    z2 = torch.normal(torch.zeros(K), 1)
-
-    posterior_sample = copy.deepcopy(theta_SWA)
-    cumNs = np.cumsum(Ns)
-    for i, (key, value) in enumerate(theta_SWA.items()):
-        # D is originally a list of OrderedDicts. Restructure to correctly
-        # shaped torch.tensors
-        layer_DT = [torch.flatten(d[key]) for d in D]  # shape: (K,Ns[i])
-        layer_D = torch.stack(layer_DT, axis=-1)  # shape: (Ns[i],K)
-
-        # reshape scaled samples to weight shapes
-        z1_tmp = (
-            1
-            / np.sqrt(2)
-            * torch.flatten(torch.sqrt(cov_diag[key]))
-            * z1[cumNs[i] : cumNs[i + 1]]
-        )
-        z1_tmp = z1_tmp.reshape(posterior_sample[key].shape)
-
-        z2_tmp = 1 / np.sqrt(2 * K) * layer_D @ z2  # per "layer"
-        z2_tmp = z2_tmp.reshape(posterior_sample[key].shape)
-
-        posterior_sample[key] = posterior_sample[key] + z1_tmp + z2_tmp
-
+    z1_tmp = 1 / np.sqrt(2) * torch.sqrt(cov_diag) * z1
+    z2_tmp = 1 / np.sqrt(2 * D.shape[0]) * D.T @ z2  # per "layer"
+    posterior_sample = theta_SWA + z1_tmp + z2_tmp
     return posterior_sample
 
 
@@ -239,8 +178,8 @@ def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9
     y_preds = []
     for i in range(nsamples):
         # sample weights and add those weights to the model
-        weights = sample_posterior_swag(theta_SWA, cov_diag, D)
-        model.load_state_dict(sample_posterior_swag(theta_SWA, cov_diag, D))
+        tweights = sample_posterior_swag(theta_SWA, cov_diag, D)
+        model.load_state_dict(tensor2ordereddict(tweights, model.state_dict()))
 
         # do prediction with current (wrt. weights) model
         y_preds.append(model(x).detach().numpy())
@@ -253,10 +192,10 @@ def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9
     lower_pi, upper_pi = y_preds[idx_percentile], y_preds[-idx_percentile]
 
     # mean (wrt. weights) model
-    model.load_state_dict(theta_SWA)
-    model_SWA = model(x).detach().numpy()
+    model.load_state_dict(tensor2ordereddict(theta_SWA, model.state_dict()))
+    predictive_swa = model(x).detach().numpy()
 
     # mean (wrt. the approximate posterior predictive distribution) model
     predictive_mean = np.mean(y_preds, axis=0)
 
-    return lower_pi, upper_pi, model_SWA, predictive_mean
+    return lower_pi, upper_pi, predictive_swa, predictive_mean

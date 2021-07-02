@@ -67,16 +67,19 @@ class Dataset(torch.utils.data.Dataset):
         return X, y
 
 
-def torch_weight_operation(weight1, weight2, operation, deepcopy=True):
-    """
-    torch.nn.Module.state_dict() is an OrderedDict of weights. We want
-    to perform computations between two (or more) such objects. This is a
-    generic function to do that - element-wise.
-    """
-    result = copy.deepcopy(weight1) if deepcopy else weight1
-    for key, value in weight1.items():
-        if isinstance(weight2, (int, float)):  # weight2 is a scalar
-            result[key] = operation(value, weight2)
-        else:  # assume weight2 is an OrderedDict
-            result[key] = operation(value, weight2[key])
-    return result
+def ordereddict2tensor(odict):
+    """Convert odered dict of tensors to one long vector (torch.tensor)"""
+    tensor = []
+    for value in odict.values():
+        tensor.append(torch.flatten(value))
+    return torch.cat(tensor)
+
+
+def tensor2ordereddict(tensor, odict):
+    """Add tensor values to ordereddict"""
+    n = 0
+    for key, value in odict.items():
+        tmp = np.prod(value.shape)
+        odict[key] = tensor[n : n + tmp].reshape(value.shape)
+        n += tmp
+    return odict

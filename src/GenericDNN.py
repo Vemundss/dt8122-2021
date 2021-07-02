@@ -16,8 +16,8 @@ class GenericDNN(torch.nn.Module):
                 output_size: shape of output - excluding batch_size
         """
         super().__init__()
-        self.fc1 = torch.nn.Linear(input_size, hidden_size)
-        self.fc2 = torch.nn.Linear(hidden_size, output_size)
+        self.fc1 = torch.nn.Linear(input_size, hidden_size, bias=True)
+        self.fc2 = torch.nn.Linear(hidden_size, output_size, bias=False)
         self.softplus = torch.nn.Softplus()
 
     def forward(self, x):

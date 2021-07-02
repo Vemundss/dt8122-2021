@@ -40,10 +40,13 @@ class Dataset(torch.utils.data.Dataset):
     torch Datasets can easily be used in torch Dataloaders which support 
     built-in mini-batching, shuffling, etc. 
     """
-    def __init__(self, X, y, name):
+    def __init__(self, X, y, name, normalize=True, astorchtensor=True):
         self.name = name # name of dataset
         self.X = X
         self.y = y[:,None] if len(y.shape) < 2 else y
+
+        self.normalize = True
+        self.astorchtensor = True
 
         # store (per feature) normalizing parameters
         self.mux = np.mean(X,axis=0)
@@ -55,11 +58,11 @@ class Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.X)
 
-    def __getitem__(self, idx, normalize=True, astorchtensor=True):
-        X = (self.X[idx] - self.mux)/self.stdx if normalize else self.X[idx]
-        y = (self.y[idx] - self.muy)/self.stdy if normalize else self.y[idx]
-        X = torch.from_numpy(X) if astorchtensor else X
-        y = torch.from_numpy(y) if astorchtensor else y
+    def __getitem__(self, idx):
+        X = (self.X[idx] - self.mux)/self.stdx if self.normalize else self.X[idx]
+        y = (self.y[idx] - self.muy)/self.stdy if self.normalize else self.y[idx]
+        X = torch.from_numpy(X) if self.astorchtensor else X
+        y = torch.from_numpy(y) if self.astorchtensor else y
         return X, y
 
 def torch_weight_operation(weight1, weight2, operation, deepcopy=True):

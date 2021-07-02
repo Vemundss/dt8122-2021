@@ -249,7 +249,7 @@ def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9
     # sort a long sample-dimension
     y_preds = np.sort(y_preds, axis=0)
 
-    idx_percentile = round((1-percentile) * nsamples)
+    idx_percentile = round((1 - percentile) * nsamples)
     lower_pi, upper_pi = y_preds[idx_percentile], y_preds[-idx_percentile]
 
     # mean (wrt. weights) model

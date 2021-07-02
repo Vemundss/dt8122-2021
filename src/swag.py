@@ -225,7 +225,7 @@ def sample_posterior_swag(theta_SWA, cov_diag, D):
     return posterior_sample
 
 
-def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9):
+def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.95):
     """
     Calculate prediction intervals using monte carlo.
 
@@ -249,7 +249,14 @@ def monte_carlo_PI(x, model, theta_SWA, cov_diag, D, nsamples=50, percentile=0.9
     # sort a long sample-dimension
     y_preds = np.sort(y_preds, axis=0)
 
-    idx_percentile = round(percentile * nsamples)
+    idx_percentile = round((1-percentile) * nsamples)
     lower_pi, upper_pi = y_preds[idx_percentile], y_preds[-idx_percentile]
 
-    return lower_pi, upper_pi, np.mean(y_preds, axis=0)
+    # mean (wrt. weights) model
+    model.load_state_dict(theta_SWA)
+    model_SWA = model(x).detach().numpy()
+
+    # mean (wrt. the approximate posterior predictive distribution) model
+    predictive_mean = np.mean(y_preds, axis=0)
+
+    return lower_pi, upper_pi, model_SWA, predictive_mean

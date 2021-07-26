@@ -1,10 +1,11 @@
 import torch
+import numpy as np
 
 import pyro
 import pyro.distributions as dist
 import torch.distributions.constraints as constraints
 import pyro.contrib.bnn as bnn
-
+from pyro.contrib.bnn.utils import adjoin_ones_vector
 
 class GenericDNN(torch.nn.Module):
     """
@@ -27,7 +28,7 @@ class GenericDNN(torch.nn.Module):
             output_size,
         )
         self.fc1 = torch.nn.Linear(input_size, hidden_size, bias=True)
-        self.fc2 = torch.nn.Linear(hidden_size, output_size, bias=True)
+        self.fc2 = torch.nn.Linear(hidden_size, output_size, bias=False)
         self.softplus = torch.nn.Softplus()
 
     def forward(self, x):
@@ -53,8 +54,8 @@ class MND_BNN(torch.nn.Module):
         super().__init__()
         # add 1 to include bias
         self.input_size, self.hidden_size, self.output_size = (
-            input_size + 1,
-            hidden_size + 1,
+            input_size,
+            hidden_size,
             output_size,
         )
 
@@ -65,14 +66,11 @@ class MND_BNN(torch.nn.Module):
             W1: weights for first dense layer
             W2: weights for second dense layer
         """
-        if W1.shape[-1] != X.shape[-1]:
-            X = torch.cat([X, torch.ones(X.shape[0], 1)], axis=-1)
-
         B = torch.nn.functional.softplus(
-            W1 @ X[..., None]
+            W1 @ adjoin_ones_vector(X)[..., None] # add bias
         )  # [b,wout,win] @ [b,win,1] -> [b,wout,1]
         B = B + X[..., None]  # skip-connect
-        F = W2 @ B  # [b,wout2,wout1] @ [b,wout1,1] -> [b,wout2,1]
+        F = W2 @ adjoin_ones_vector(B[...,0])[...,None]  # [b,wout2,wout1] @ [b,wout1,1] -> [b,wout2,1]
         return F[..., 0]  # [b,wout2,1] -> [b,wout2]
 
     def sample_weights(self):
@@ -94,8 +92,8 @@ class MND_BNN(torch.nn.Module):
         ).sample()
 
         # reshape to matrices (inverse of vec(matrix))
-        W1 = W1.reshape(self.hidden_size, self.input_size)
-        W2 = W2.reshape(self.output_size, self.hidden_size)
+        W1 = W1.reshape(self.hidden_size, self.input_size+1)
+        W2 = W2.reshape(self.output_size, self.hidden_size+1)
         return W1, W2
 
     def model(self, X, y):
@@ -109,31 +107,34 @@ class MND_BNN(torch.nn.Module):
         options = dict(dtype=y.dtype, device=y.device)
         batch_size = X.shape[0]
 
-        # add bias
-        X = torch.cat([X, torch.ones(batch_size, 1)], axis=-1)
-
         # prior for first weight matrix W1, i.e. p(W1) = MN(0,I,I)
-        W1_loc = torch.zeros((self.input_size * self.hidden_size), **options)
-        W1_cov = torch.eye((self.input_size * self.hidden_size), **options)
+        W1_loc = torch.zeros(((self.input_size+1) * self.hidden_size), **options)
+        W1_cov = torch.eye(((self.input_size+1) * self.hidden_size), **options)
 
         # prior for second weight matrix W2, i.e. p(W2) = MN(0,I,I)
-        W2_loc = torch.zeros((self.hidden_size * self.output_size), **options)
-        W2_cov = torch.eye((self.hidden_size * self.output_size), **options)
+        W2_loc = torch.zeros(((self.hidden_size+1) * self.output_size), **options)
+        W2_cov = torch.eye(((self.hidden_size+1) * self.output_size), **options)
+
+        # tau = pyro.sample("tau", dist.Gamma(6,6))
 
         with pyro.plate("data", batch_size):
             # sample from prior (value will be sampled by guide when computing the ELBO)
             W1 = pyro.sample("W1", dist.MultivariateNormal(W1_loc, W1_cov))
             W2 = pyro.sample("W2", dist.MultivariateNormal(W2_loc, W2_cov))
             # undo vec(W1), i.e. make matrix
+            
             W1 = W1.reshape(
-                batch_size, self.hidden_size, self.input_size
+                batch_size, self.hidden_size, self.input_size+1
             )  # pseudo-W1.T
             W2 = W2.reshape(
-                batch_size, self.output_size, self.hidden_size
+                batch_size, self.output_size, self.hidden_size+1
             )  # pseudo-W2.T
 
             # The likelihood. (equivalent to MSE-loss?)
-            out = pyro.sample("y", dist.Normal(self.forward(X, W1, W2), scale=1), obs=y)
+            F = self.forward(X, W1, W2)
+            out = pyro.sample(
+                "y", dist.Normal(F, scale=1.).to_event(2), obs=y
+            )
 
     def guide(self, X, y):
         """
@@ -147,23 +148,20 @@ class MND_BNN(torch.nn.Module):
         options = dict(dtype=y.dtype, device=y.device)
         batch_size = X.shape[0]
 
-        # add bias
-        X = torch.cat([X, torch.ones(batch_size, 1)], axis=-1)
-
-        mu_W1_init = torch.randn(self.input_size * self.hidden_size) * 0.01
-        mu_W2_init = torch.randn(self.hidden_size * self.output_size) * 0.01
+        mu_W1_init = torch.randn((self.input_size+1) * self.hidden_size) * 0.01
+        mu_W2_init = torch.randn((self.hidden_size+1) * self.output_size) * 0.01
 
         U1 = (
-            torch.eye(self.input_size, **options)
-            + torch.rand((self.input_size, self.input_size)) * 0.01
+            torch.eye(self.input_size+1, **options)
+            + torch.rand((self.input_size+1, self.input_size+1)) * 0.01
         )
         V1 = (
             torch.eye(self.hidden_size, **options)
             + torch.rand((self.hidden_size, self.hidden_size)) * 0.01
         )
         U2 = (
-            torch.eye(self.hidden_size, **options)
-            + torch.rand((self.hidden_size, self.hidden_size)) * 0.01
+            torch.eye(self.hidden_size+1, **options)
+            + torch.rand((self.hidden_size+1, self.hidden_size+1)) * 0.01
         )
         V2 = (
             torch.eye(self.output_size, **options)
@@ -180,6 +178,8 @@ class MND_BNN(torch.nn.Module):
         cov1 = torch.kron(V1, U1)
         cov2 = torch.kron(V2, U2)
 
+        #tau = pyro.sample("tau", dist.Gamma(6, 6))
+
         with pyro.plate("data", batch_size):
             # W1 = pyro.sample("W1", dist.MultivariateNormal(mu_W1, cov_W1))
             W1 = pyro.sample("W1", dist.MultivariateNormal(mu_W1, cov1))
@@ -192,7 +192,7 @@ class MND_BNN_alternative(torch.nn.Module):
     for the MultiVN distributions, in contrast to the kronicker product
     transformation from MatrixVN to MultiVN.
 
-    This might be a bit faster.
+    This is a bit faster.
     """
 
     def __init__(self, input_size, hidden_size, output_size):
@@ -205,8 +205,8 @@ class MND_BNN_alternative(torch.nn.Module):
         super().__init__()
         # Adds 1 to include bias
         self.input_size, self.hidden_size, self.output_size = (
-            input_size + 1,
-            hidden_size + 1,
+            input_size,
+            hidden_size,
             output_size,
         )
 
@@ -217,30 +217,53 @@ class MND_BNN_alternative(torch.nn.Module):
             W1: weights for first dense layer
             W2: weights for second dense layer
         """
-        if W1.shape[1] != X.shape[-1]:
-            X = torch.cat([X, torch.ones(X.shape[0], 1)], axis=-1)
-
         B = torch.nn.functional.softplus(
-            W1 @ X[..., None]
+            W1 @ adjoin_ones_vector(X)[..., None] # add bias
         )  # [b,wout,win] @ [b,win,1] -> [b,wout,1]
         B = B + X[..., None]  # skip-connect
-        F = W2 @ B  # [b,wout2,wout1] @ [b,wout1,1] -> [b,wout2,1]
+        F = W2 @ adjoin_ones_vector(B[...,0])[...,None]  # [b,wout2,wout1] @ [b,wout1,1] -> [b,wout2,1]
         return F[..., 0]  # [b,wout2,1] -> [b,wout2]
 
     def sample_weights(self):
         """
         Sample weight from variational posterior
         """
-        mu1, tril_cov1, mu2, tril_cov2 = pyro.get_param_store().values()
+        mu1, tril_cov1, mu2, tril_cov2, alpha, beta = pyro.get_param_store().values()
         W1 = torch.distributions.multivariate_normal.MultivariateNormal(
             mu1, scale_tril=tril_cov1
         ).sample()
         W2 = torch.distributions.multivariate_normal.MultivariateNormal(
             mu2, scale_tril=tril_cov2
         ).sample()
-        W1 = W1.reshape(self.hidden_size, self.input_size)
-        W2 = W2.reshape(self.output_size, self.hidden_size)
+        W1 = W1.reshape(self.hidden_size, self.input_size+1)
+        W2 = W2.reshape(self.output_size, self.hidden_size+1)
         return W1, W2
+
+    def monte_carlo_PI(self, X, nsamples=50, percentile=0.95):
+        """
+        Calculate monte carlo prediction interval by sampling posterior
+        and forwarding.
+        """
+        mu1, _, mu2, _, _, _ = pyro.get_param_store().values()
+        self.sample_weights()
+
+        y_preds = []
+        for i in range(nsamples):
+            W1, W2 = self.sample_weights()
+            y_preds.append(self(X, W1, W2).detach().numpy()) # forward (nsamples, mini-batch)
+
+        y_preds = np.array(y_preds)
+        y_preds = np.sort(y_preds, axis=0)
+        idx_percentile = round((1 - percentile) * nsamples)
+        lower_pi, upper_pi = y_preds[idx_percentile], y_preds[-idx_percentile]
+
+        W1 = mu1.reshape(self.hidden_size, self.input_size+1)
+        W2 = mu2.reshape(self.output_size, self.hidden_size+1)
+        posterior_mean = self(X, W1, W2).detach().numpy() # forward with posterior mean weights
+
+        predictive_mean = np.mean(y_preds, axis=0)
+
+        return lower_pi, upper_pi, posterior_mean, predictive_mean
 
     def model(self, X, y):
         """
@@ -253,31 +276,33 @@ class MND_BNN_alternative(torch.nn.Module):
         options = dict(dtype=y.dtype, device=y.device)
         batch_size = X.shape[0]
 
-        # add bias
-        X = torch.cat([X, torch.ones(batch_size, 1)], axis=-1)
-
         # prior for first weight matrix W1, i.e. p(W1) = MN(0,I,I)
-        W1_loc = torch.zeros((self.input_size * self.hidden_size), **options)
-        W1_cov = torch.eye((self.input_size * self.hidden_size), **options)
+        W1_loc = torch.zeros(((self.input_size+1) * self.hidden_size), **options)
+        W1_cov = torch.eye(((self.input_size+1) * self.hidden_size), **options)
 
         # prior for second weight matrix W2, i.e. p(W2) = MN(0,I,I)
-        W2_loc = torch.zeros((self.hidden_size * self.output_size), **options)
-        W2_cov = torch.eye((self.hidden_size * self.output_size), **options)
+        W2_loc = torch.zeros(((self.hidden_size+1) * self.output_size), **options)
+        W2_cov = torch.eye(((self.hidden_size+1) * self.output_size), **options)
 
+        
         with pyro.plate("data", batch_size):
             # sample from prior (value will be sampled by guide when computing the ELBO)
             W1 = pyro.sample("W1", dist.MultivariateNormal(W1_loc, W1_cov))
             W2 = pyro.sample("W2", dist.MultivariateNormal(W2_loc, W2_cov))
             # undo vec(W1), i.e. make matrix
             W1 = W1.reshape(
-                batch_size, self.hidden_size, self.input_size
+                batch_size, self.hidden_size, self.input_size+1
             )  # pseudo-W1.T
             W2 = W2.reshape(
-                batch_size, self.output_size, self.hidden_size
+                batch_size, self.output_size, self.hidden_size+1
             )  # pseudo-W2.T
 
-            # The likelihood. (equivalent to MSE-loss?)
-            out = pyro.sample("y", dist.Normal(self.forward(X, W1, W2), scale=1), obs=y)
+           # The likelihood. (equivalent to MSE-loss?)
+            F = self.forward(X, W1, W2)
+            tau = pyro.sample("tau", dist.Gamma(6., 6.))
+            out = pyro.sample(
+                "y", dist.Normal(F, scale=1 / tau[...,None]).to_event(2), obs=y
+            )
 
     def guide(self, X, y):
         """
@@ -291,24 +316,21 @@ class MND_BNN_alternative(torch.nn.Module):
         options = dict(dtype=y.dtype, device=y.device)
         batch_size = X.shape[0]
 
-        # add bias
-        X = torch.cat([X, torch.ones(batch_size, 1)], axis=-1)
-
-        mu_W1_init = torch.randn(self.input_size * self.hidden_size) * 0.01
-        mu_W2_init = torch.randn(self.hidden_size * self.output_size) * 0.01
+        mu_W1_init = torch.randn((self.input_size+1) * self.hidden_size) * 0.01
+        mu_W2_init = torch.randn((self.hidden_size+1) * self.output_size) * 0.01
         var_W1_init = torch.eye(
-            (self.input_size * self.hidden_size), **options
+            ((self.input_size+1) * self.hidden_size), **options
         )  # torch.rand((self.input_size * self.hidden_size, self.input_size * self.hidden_size))
         var_W2_init = torch.eye(
-            (self.hidden_size * self.output_size), **options
+            ((self.hidden_size+1) * self.output_size), **options
         )  # torch.rand((self.hidden_size * self.output_size, self.hidden_size * self.output_size))
 
         tril_cov1 = torch.randn(
-            (self.input_size * self.hidden_size, self.input_size * self.hidden_size)
+            ((self.input_size+1) * self.hidden_size, (self.input_size+1) * self.hidden_size)
         )
         tril_cov1 = torch.tril(tril_cov1, diagonal=-1) + var_W1_init
         tril_cov2 = torch.randn(
-            (self.hidden_size * self.output_size, self.hidden_size * self.output_size)
+            ((self.hidden_size+1) * self.output_size, (self.hidden_size+1) * self.output_size)
         )
         tril_cov2 = torch.tril(tril_cov2, diagonal=-1) + var_W2_init
 
@@ -321,15 +343,29 @@ class MND_BNN_alternative(torch.nn.Module):
             "tril_cov2", tril_cov2, constraint=constraints.lower_cholesky
         )
 
+        alpha = pyro.param("alpha", torch.tensor(6.), constraint=constraints.positive)
+        beta = pyro.param("beta", torch.tensor(6.), constraint=constraints.positive)
+
         with pyro.plate("data", batch_size):
-            # W1 = pyro.sample("W1", dist.MultivariateNormal(mu_W1, cov_W1))
+            tau = pyro.sample("tau", dist.Gamma(alpha, beta))
             W1 = pyro.sample("W1", dist.MultivariateNormal(mu_W1, scale_tril=tril_cov1))
             W2 = pyro.sample("W2", dist.MultivariateNormal(mu_W2, scale_tril=tril_cov2))
 
+class HiddenLayer2(bnn.HiddenLayer):
+    """
+    Tries to fix HiddenLayer after it broke due to pyro-update.
+    Fails...
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._batch_shape = self.X.shape[0:1]
+        self._event_shape = self.A_mean.shape[1:]
 
 class MND_BNN_nativehidden(torch.nn.Module):
     """
-    Tries to use pyro native HiddenLayer
+    Stopped working after I upgraded pyro... ridiculous
+
+    Uses pyro native HiddenLayer
 
     Takes inspiration from:
     https://alsibahi.xyz/snippets/2019/06/15/pyro_mnist_bnn_kl.html
@@ -344,23 +380,15 @@ class MND_BNN_nativehidden(torch.nn.Module):
         """
         super().__init__()
         self.input_size, self.hidden_size, self.output_size = (
-            input_size + 1,
-            hidden_size + 1,
+            input_size,
+            hidden_size,
             output_size,
         )
 
-    def forward(self, X, W1, W2):
-        """
-        Args:
-            W1: weights for first dense layer
-            W2: weights for second dense layer
-        """
-        B = torch.nn.functional.softplus(
-            W1 @ X[..., None]
-        )  # [b,wout,win] @ [b,win,1] -> [b,wout,1]
-        B = B + X[..., None]
-        F = W2 @ B  # [b,wout2,wout1] @ [b,wout1,1] -> [b,wout2,1]
-        return F[..., 0]  # [b,wout2,1] -> [b,wout2]
+    def forward(self, X):
+        # res.append(t.nodes['logits']['value'])
+        t = pyro.poutine.trace(self.guide).get_trace(X, None)
+        return t.nodes["h2"]["value"][:, 0]
 
     def sample_weights(self):
         a1_mean, a1_scale, a2_mean, a2_scale = pyro.get_param_store().values()
@@ -371,53 +399,73 @@ class MND_BNN_nativehidden(torch.nn.Module):
             torch.flatten(a2_mean), torch.diag(torch.flatten(a2_scale))
         ).sample()
         W1 = W1.reshape(self.hidden_size, self.input_size)
-        W2 = W2.reshape(self.output_size, self.hidden_size)
+        W2 = W2.reshape(self.output_size, self.hidden_size + 1)
         return W1, W2
 
-    def model(self, X, y):
-        options = dict(dtype=y.dtype, device=y.device)
+    def model(self, X, y=None):
+        options = dict(dtype=X.dtype, device=X.device)
         batch_size = X.shape[0]
 
         # prior for first weight matrix W1, i.e. p(W1) = MN(0,I,I)
-        a1_mean = torch.zeros((self.input_size, self.hidden_size), **options)
-        a1_scale = torch.ones((self.input_size, self.hidden_size), **options)
+        a1_mean = torch.zeros((self.input_size + 1, self.hidden_size), **options)
+        a1_scale = torch.ones((self.input_size + 1, self.hidden_size), **options)
 
         a2_mean = torch.zeros((self.hidden_size + 1, self.output_size), **options)
         a2_scale = torch.ones((self.hidden_size + 1, self.output_size), **options)
 
-        # Mark batched calculations to be conditionally independent given parameters using `plate`
+        # Conditionally independent data (mini-batch) dimension
         with pyro.plate("data", size=batch_size):
             # Sample first hidden layer
-            h1 = pyro.sample(
-                "h1",
-                bnn.HiddenLayer(
-                    X, a1_mean, a1_scale, non_linearity=torch.nn.functional.softplus
+            
+
+            """
+            H1 = bnn.HiddenLayer(
+                adjoin_ones_vector(X),  # X, including bias
+                a1_mean,
+                a1_scale,
+                non_linearity=torch.nn.functional.softplus,
+                include_hidden_bias=True,  # sadly "False" does not work..
+            )
+            """
+
+            h1 = pyro.sample("h1", HiddenLayer2(
+                    adjoin_ones_vector(X),  # X, including bias
+                    a1_mean,
+                    a1_scale,
+                    non_linearity=torch.nn.functional.softplus,
+                    include_hidden_bias=True,  # sadly "False" does not work..
                 ),
             )
             # Sample second hidden layer
+            h1 = h1[...,:-1] # undo 'include_hidden_bias' manually
+
             h2 = pyro.sample(
-                "h2", bnn.HiddenLayer(h1, a2_mean, a2_scale, non_linearity=lambda x: x)
+                "h2",
+                HiddenLayer2(
+                    adjoin_ones_vector(h1 + X), # skip-connect and add bias
+                    a2_mean,
+                    a2_scale,
+                    non_linearity=lambda x: x,
+                    include_hidden_bias=True,
+                ),
             )
-            # Condition on observed labels, so it calculates the log-likehood loss when training using VI
-            return pyro.sample("y", dist.Normal(h2[:, 0:1], scale=1), obs=y)
+            h2 = h2[...,:-1] # undo 'include_hidden_bias' manually
+
+            if y is not None:
+                # Condition on observed labels, so it calculates the log-likehood loss when training using VI
+                pyro.sample("y", dist.Normal(h2, scale=1), obs=y)
 
     def guide(self, X, y):
-        options = dict(dtype=y.dtype, device=y.device)
+        options = dict(dtype=X.dtype, device=X.device)
         batch_size = X.shape[0]
-        # Set-up parameters to be optimized to approximate the true posterior
-        # Mean parameters are randomly initialized to small values around 0, and scale parameters
-        # are initialized to be 0.1 to be closer to the expected posterior value which we assume is stronger than
-        # the prior scale of 1.
-        # Scale parameters must be positive, so we constraint them to be larger than some epsilon value (0.01).
-        # Variational dropout are initialized as in the prior model, and constrained to be between 0.1 and 1 (so dropout
-        # rate is between 0.1 and 0.5) as suggested in the local reparametrization paper
+
         a1_mean = pyro.param(
             "a1_mean", 0.01 * torch.randn((self.input_size, self.hidden_size))
         )
         a1_scale = pyro.param(
             "a1_scale",
             0.1 * torch.ones((self.input_size, self.hidden_size)),
-            constraint=constraints.greater_than(0.01),
+            constraint=constraints.positive,  # greater_than(0.001),
         )
         a2_mean = pyro.param(
             "a2_mean", 0.01 * torch.randn((self.hidden_size + 1, self.output_size))
@@ -425,7 +473,7 @@ class MND_BNN_nativehidden(torch.nn.Module):
         a2_scale = pyro.param(
             "a2_scale",
             0.1 * torch.ones((self.hidden_size + 1, self.output_size)),
-            constraint=constraints.greater_than(0.01),
+            constraint=constraints.positive,  # greater_than(0.001),
         )
 
         # Sample latent values using the variational parameters that are set-up above.

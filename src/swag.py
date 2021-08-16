@@ -10,43 +10,22 @@ import sys
 import os
 import copy
 import operator
+from pathlib import Path
 
-from methods import ordereddict2tensor, tensor2ordereddict
+from methods import *
 
 
-def train_swag(
-    net,
-    trainloader,
-    optimizer,
-    criterion,
-    init_epochs=100,
-    sampling_epochs=5,
-    nsamples=20,
-    path_to_checkpoints="../checkpoints/",
-):
+def generic_train_loop(net, trainloader, optimizer, criterion, nepochs):
     """
-    Training phase of a SWAG-based model
-
-    Args:
-        net: (torch.nn.Module) model
-        trainloader: (torch.utils.data.DataLoader) training data loader
-        optimizer: (torch.optim) optimizer
-        criterion: (torch.nn) loss function, e.g. MSELoss()
-        init_epochs: (int) number of epochs for initial training ("warm-up")
-        sampling_epochs: (int) number of training epochs before sampling weights
-        nsamples: (int) total number of weights to sample
-        path_to_checkpoints: (str) path to checkpoint folder to save weights
+    Classic DL training loop
     """
-    # ---------
-    # Vanilla training of a newly instantiated model
-    # ---------
-    print("Training to initial weight-solution (MLE)")
     loss_history = []
-    for epoch in tqdm.trange(init_epochs):  # loop over the dataset multiple times
+    # loop over the dataset many times (use tqdm, i.e. progress bar, if many epochs)
+    for epoch in tqdm.trange(nepochs) if nepochs > 10 else range(nepochs):
 
         # generic torch training loop
         running_loss = 0.0
-        for i, data in enumerate(trainloader):
+        for data in trainloader:
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
@@ -62,14 +41,56 @@ def train_swag(
             running_loss = loss.item()
         loss_history.append(running_loss / len(trainloader))
 
-    # print("Saving initial weights")
+    return net, loss_history
+
+
+def train_swag(
+    net,
+    trainloader,
+    optimizer,
+    criterion,
+    init_epochs=100,
+    sampling_epochs=5,
+    nsamples=20,
+    path_to_checkpoints="../checkpoints/",
+    custom_addition_name="",
+):
+    """
+    Training phase of a SWAG-based model
+
+    Args:
+        net: (torch.nn.Module) model
+        trainloader: (torch.utils.data.DataLoader) training data loader
+        optimizer: (torch.optim) optimizer
+        criterion: (torch.nn) loss function, e.g. MSELoss()
+        init_epochs: (int) number of epochs for initial training ("warm-up")
+        sampling_epochs: (int) number of training epochs before sampling weights
+        nsamples: (int) total number of weights to sample
+        path_to_checkpoints: (str) path to checkpoint folder to save weights
+        custom_addition_name: (str) extra trailing naming to checkpoint folder
+    """
+    # ---------
+    # Vanilla training of a newly instantiated model
+    # ---------
+    print("Training to initial weight-solution (MLE)")
+    net, loss_history = generic_train_loop(
+        net, trainloader, optimizer, criterion, nepochs=init_epochs
+    )
+
+    # Make dirs and save checkpoint
+    Path(path_to_checkpoints + trainloader.dataset.name + custom_addition_name).mkdir(
+        parents=True, exist_ok=True
+    )
     torch.save(
         {
             "model_state_dict": net.state_dict(),
             "loss_history": loss_history,
             "epoch": init_epochs,
         },
-        path_to_checkpoints + trainloader.dataset.name + f"-{init_epochs:04d}",
+        path_to_checkpoints
+        + trainloader.dataset.name
+        + custom_addition_name
+        + f"/{init_epochs:04d}",
     )
 
     # ---------
@@ -79,28 +100,9 @@ def train_swag(
         "Iterate/train further from initial weight-solution ('Sample' around posterior mode)"
     )
     for weight_sample in tqdm.trange(nsamples):
-        loss_history = []
-        for _ in range(sampling_epochs):
-
-            # generic torch training loop
-            running_loss = 0.0
-            for data in trainloader:
-                # get the inputs; data is a list of [inputs, labels]
-                inputs, labels = data
-
-                # zero the parameter gradients
-                optimizer.zero_grad()
-
-                # forward + backward + optimize
-                outputs = net(inputs)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-
-                running_loss += loss.item()
-            loss_history.append(running_loss / len(trainloader))
-
-        # print(f"Saving {weight_sample=} weights")
+        net, loss_history = generic_train_loop(
+            net, trainloader, optimizer, criterion, nepochs=sampling_epochs
+        )
         current_epoch = init_epochs + weight_sample * sampling_epochs
         torch.save(
             {
@@ -108,7 +110,10 @@ def train_swag(
                 "loss_history": loss_history,
                 "epoch": current_epoch,
             },
-            path_to_checkpoints + trainloader.dataset.name + f"-{current_epoch:04d}",
+            path_to_checkpoints
+            + trainloader.dataset.name
+            + custom_addition_name
+            + f"/{current_epoch:04d}",
         )
 
 
@@ -127,18 +132,17 @@ def inference_swag(name, checkpoint_path="../checkpoints/"):
     tweights = []
     onlyfiles = [
         f
-        for f in os.listdir(checkpoint_path)
-        if os.path.isfile(os.path.join(checkpoint_path, f))
+        for f in os.listdir(checkpoint_path + name + "/")
+        if os.path.isfile(os.path.join(checkpoint_path + name + "/", f))
     ]
     for file in onlyfiles:
-        if name in file:
-            odict = torch.load(checkpoint_path + file)["model_state_dict"]
-            tweight = ordereddict2tensor(odict)
-            tweights.append(tweight)
+        odict = torch.load(checkpoint_path + name + "/" + file)["model_state_dict"]
+        tweight = ordereddict2tensor(odict)
+        tweights.append(tweight)
 
     if len(tweights) == 0:
         raise Exception(
-            f"{e}. The weights at <{checkpoint_path + name}> does not exist. TRAIN first!"
+            f"Custom Exception! The weights at <{checkpoint_path + name}> does not exist. TRAIN first!"
         ) from None
 
     # do inference

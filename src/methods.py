@@ -1,3 +1,6 @@
+"""
+Diverse methods used throughout the project across algorithms
+"""
 import numpy as np
 import torch
 import copy
@@ -65,7 +68,6 @@ class Dataset(torch.utils.data.Dataset):
         X = torch.from_numpy(X) if self.astorchtensor else X
         y = torch.from_numpy(y) if self.astorchtensor else y
         return X, y
-
 
 def ordereddict2tensor(odict):
     """Convert odered dict of tensors to one long vector (torch.tensor)"""

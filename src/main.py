@@ -142,7 +142,9 @@ def swag(dataset_path):
     )
 
     # evaluate model
-    print("--- EVALUATE MODEL WITH ASSIGNMENT SPECIFIED METRICS ---")
+    print(
+        f"--- EVALUATE SWAG WITH ASSIGNMENT SPECIFIED METRICS ON {trainloader.dataset.name}---"
+    )
     # mu_pred or mu_swa?
     print(f"{rmse(y_true, mu_pred)=}, {picp(Lpi, Upi, y_true)=}, {mpiw(Lpi, Upi)=}")
 
@@ -203,7 +205,9 @@ def mnd(dataset_path):
     )
 
     # evaluate model
-    print("--- EVALUATE MODEL WITH ASSIGNMENT SPECIFIED METRICS ---")
+    print(
+        f"--- EVALUATE MND WITH ASSIGNMENT SPECIFIED METRICS ON {trainloader.dataset.name}---"
+    )
     # mu_pred or mu_posteriormu_posterior?
     print(f"{rmse(y_true, mu_pred)=}, {picp(Lpi, Upi, y_true)=}, {mpiw(Lpi, Upi)=}")
 
@@ -289,7 +293,9 @@ def swagm(dataset_path):
     )
 
     # evaluate model
-    print("--- EVALUATE MODEL WITH ASSIGNMENT SPECIFIED METRICS ---")
+    print(
+        f"--- EVALUATE SWAGM WITH ASSIGNMENT SPECIFIED METRICS ON {trainloader.dataset.name}---"
+    )
     print(f"{rmse(y_true, mu_pred)=}, {picp(Lpi, Upi, y_true)=}, {mpiw(Lpi, Upi)=}")
 
 

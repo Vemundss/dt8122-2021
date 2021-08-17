@@ -1,0 +1,13 @@
+name: probai
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.8
+  - matplotlib
+  - scipy
+  - pytorch
+  - torchvision
+  - pyro-ppl
+  - jupyterlab
+prefix: /Users/vemundss/opt/anaconda3/envs/probai

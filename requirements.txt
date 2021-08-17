@@ -5,3 +5,4 @@ torch
 torchvision
 pyro-ppl
 jupyterlab
+tqdm

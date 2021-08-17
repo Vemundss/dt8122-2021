@@ -69,6 +69,7 @@ class Dataset(torch.utils.data.Dataset):
         y = torch.from_numpy(y) if self.astorchtensor else y
         return X, y
 
+
 def ordereddict2tensor(odict):
     """Convert odered dict of tensors to one long vector (torch.tensor)"""
     tensor = []

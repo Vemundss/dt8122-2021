@@ -291,7 +291,6 @@ def inference_swagm(name, checkpoint_path="../checkpoints/"):
 
     N = torch.sum(ns)
     probs = ns / N
-    print(f"{probs=}")
     catdist = torch.distributions.categorical.Categorical(probs)
 
     return theta_SWAs, cov_diags, Ds, catdist
@@ -303,7 +302,6 @@ def sample_posterior_swagm(theta_SWAs, cov_diags, Ds, catdist):
     mixture
     """
     mixture = catdist.sample()
-    #mixture = 3
     theta_SWA, cov_diag, D = theta_SWAs[mixture], cov_diags[mixture], Ds[mixture]
 
     z1 = torch.normal(torch.zeros(theta_SWA.shape), 1)

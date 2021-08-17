@@ -3,6 +3,7 @@ Custom implementation of the variational algorithm described in paper:
 'Multiplicative Normalizing Flows for Variational Bayesian Neural Networks' 
 by Louizos and Welling (2017)
 """
+import sys
 import torch
 import numpy as np
 
@@ -11,6 +12,7 @@ import pyro.distributions as dist
 import torch.distributions.constraints as constraints
 import pyro.contrib.bnn as bnn
 from pyro.contrib.bnn.utils import adjoin_ones_vector
+
 
 class MND_BNN(torch.nn.Module):
     """

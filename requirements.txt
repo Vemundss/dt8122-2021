@@ -1,7 +1,7 @@
 matplotlib
 numpy
 scipy
-pytorch
+torch
 torchvision
 pyro-ppl
 jupyterlab

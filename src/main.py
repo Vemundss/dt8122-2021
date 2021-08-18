@@ -2,7 +2,8 @@
 Main file as specified by assignment (ProbAI2021).
 
 - As an alternative, the project contains jupyter notebooks for each algorithm
-implemented. This is, in my opinion, a superior way to inspect the implementations.
+implemented. I prefer using jupyter notebook for viewing code, but these have
+not been cleaned up for the delivery.
 """
 import argparse
 import sys
@@ -178,7 +179,7 @@ def mnd(dataset_path):
     # pyro.clear_param_store()
 
     # setup the optimizer
-    optimizer = Adam({"lr": 1.0e-3})
+    optimizer = Adam({"lr": 1.0e-3}, {"clip_norm": 2.0})
     svi = SVI(net.model, net.guide, optimizer, loss=Trace_ELBO())
     # svi = SVI(net.model, AutoMultivariateNormal(net.model), optimizer, loss=Trace_ELBO())
 

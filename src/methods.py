@@ -60,23 +60,26 @@ class Dataset(torch.utils.data.Dataset):
         self.muy = np.mean(y, axis=0)
         self.stdy = np.std(y, axis=0)
 
+        """
+        # Tries to change normalization such that we avoid overshooting in
+        # learning. Initial trials with this normalization does not appear to
+        # help.
         self.minx = np.min(X, axis=0)
         self.maxx = np.max(X-self.minx, axis=0)
         self.miny = np.min(y, axis=0)
         self.maxy = np.max(y-self.miny, axis=0)
-        
+        """
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
-        #X = (self.X[idx] - self.mux) / self.stdx if self.normalize else self.X[idx]
-        #y = (self.y[idx] - self.muy) / self.stdy if self.normalize else self.y[idx]
+        X = (self.X[idx] - self.mux) / self.stdx if self.normalize else self.X[idx]
+        y = (self.y[idx] - self.muy) / self.stdy if self.normalize else self.y[idx]
         
-        X = (self.X[idx] - self.minx) / self.maxx if self.normalize else self.X[idx]
-        y = (self.y[idx] - self.miny) / self.maxy if self.normalize else self.y[idx]
+        #X = (self.X[idx] - self.minx) / self.maxx if self.normalize else self.X[idx]
+        #y = (self.y[idx] - self.miny) / self.maxy if self.normalize else self.y[idx]
         
-
         # protein.txt has some extreme values (>50), even after a standard
         # normal standardization. This seems like corrupt data. Either way,
         # it creates such spikes in gradients that all learning ends up in weights

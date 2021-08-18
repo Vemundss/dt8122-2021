@@ -188,10 +188,12 @@ def mnd(dataset_path):
     test_elbo = []
     # training loop
     tqdmloop = tqdm.trange(epochs, desc='epoch, loss')
+    trainloader.clip_extreme_values = True
     for epoch in tqdm.trange(epochs):
         total_epoch_loss_train = train(svi, trainloader, trainloader.batch_size)
         train_elbo.append(-total_epoch_loss_train)
         tqdmloop.set_description(f"{epoch=}, loss={total_epoch_loss_train}")
+    trainloader.clip_extreme_values = False
 
     # do predictions
     Lpi, Upi, mu_posterior, mu_pred = net.monte_carlo_PI(

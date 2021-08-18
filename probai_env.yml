@@ -10,4 +10,5 @@ dependencies:
   - torchvision
   - pyro-ppl
   - jupyterlab
+  - tqdm
 prefix: /Users/vemundss/opt/anaconda3/envs/probai

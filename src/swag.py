@@ -21,11 +21,11 @@ def generic_train_loop(net, trainloader, optimizer, criterion, nepochs):
     """
     loss_history = []
     # loop over the dataset many times (use tqdm, i.e. progress bar, if many epochs)
-    for epoch in tqdm.trange(nepochs) if nepochs > 10 else range(nepochs):
+    for epoch in tqdm.trange(nepochs) if nepochs > 20 else range(nepochs):
 
         # generic torch training loop
         running_loss = 0.0
-        for data in trainloader:
+        for i,data in enumerate(trainloader):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
@@ -37,6 +37,9 @@ def generic_train_loop(net, trainloader, optimizer, criterion, nepochs):
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+
+            if torch.isnan(loss):
+                print(f"LOSS is nan! {loss=}")
 
             running_loss = loss.item()
         loss_history.append(running_loss / len(trainloader))
@@ -100,6 +103,11 @@ def train_swag(
         "Iterate/train further from initial weight-solution ('Sample' around posterior mode)"
     )
     for weight_sample in tqdm.trange(nsamples):
+        # change optimizer to SGD during sampling (SWAG-specified)
+        optimizer = torch.optim.SGD(net.parameters(), lr=1e-3, momentum=0.9)
+        # clip outliers since we are using SGD
+        trainloader.clip_extreme_values = True
+
         net, loss_history = generic_train_loop(
             net, trainloader, optimizer, criterion, nepochs=sampling_epochs
         )
@@ -115,6 +123,10 @@ def train_swag(
             + custom_addition_name
             + f"/{current_epoch:04d}",
         )
+
+    # not really important, since we don't use the trainloader for anything else
+    # ,but reset outlier clipping just, just in case.
+    trainloader.clip_extreme_values = False
 
 
 def inference_swag(name, checkpoint_path="../checkpoints/"):

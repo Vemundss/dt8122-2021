@@ -93,8 +93,9 @@ def swag(dataset_path):
         hidden_size := input_size,
         output_size := 1,
     )
-    criterion = torch.nn.MSELoss()  # L1Loss()
-    optimizer = torch.optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+    criterion = torch.nn.MSELoss() # L1Loss()
+    #optimizer = torch.optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+    optimizer = torch.optim.Adam(net.parameters(), lr=1.0e-3)
 
     # train and save weights
     checkpoint_path = "../checkpoints/"
@@ -107,14 +108,17 @@ def swag(dataset_path):
                 # can't delete non-existing file... just carry on
                 pass
 
+        # limit #epochs and #sampling_epochs depending on size of dataset
+        epochs = int(np.ceil(1e6 / len(trainloader.dataset)))
+        sampling_epochs = int(np.ceil(3e3 / len(trainloader.dataset)))
         # train and save weights
         train_swag(
             net,
             trainloader,
             optimizer,
             criterion,
-            init_epochs=1000,
-            sampling_epochs=5,
+            init_epochs=epochs,
+            sampling_epochs=sampling_epochs,
             nsamples=200,
             path_to_checkpoints=checkpoint_path,
         )
@@ -178,10 +182,12 @@ def mnd(dataset_path):
     svi = SVI(net.model, net.guide, optimizer, loss=Trace_ELBO())
     # svi = SVI(net.model, AutoMultivariateNormal(net.model), optimizer, loss=Trace_ELBO())
 
+    # limit #epochs depending on size of dataset
+    epochs = int(np.ceil(1e6 / len(trainloader.dataset)))
     train_elbo = []
     test_elbo = []
     # training loop
-    for epoch in range(NUM_EPOCHS := 5000):
+    for epoch in range(epochs):
         total_epoch_loss_train = train(svi, trainloader, trainloader.batch_size)
         train_elbo.append(-total_epoch_loss_train)
         if not (epoch % 100):
@@ -233,11 +239,12 @@ def swagm(dataset_path):
             output_size := 1,
         )
         criterion = torch.nn.MSELoss()  # L1Loss()
-        optimizer = torch.optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+        #optimizer = torch.optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+        optimizer = torch.optim.Adam(net.parameters(), lr=1.0e-3)
         return net, criterion, optimizer
 
-    # Set 'train:=True' if model not previously trained, or want to train a new model
     checkpoint_path = "../checkpoints/"
+    # Set 'train:=True' if model not previously trained, or want to train a new model
     if train := True:
 
         # delete previous checkpoints for model with current dataset
@@ -248,13 +255,16 @@ def swagm(dataset_path):
                 # can't delete non-existing file... just carry on
                 pass
 
+        # limit #epochs and #sampling_epochs depending on size of dataset
+        epochs = int(np.ceil(1e6 / len(trainloader.dataset)))
+        sampling_epochs = int(np.ceil(3e3 / len(trainloader.dataset)))
         # train and save weights
         train_swagm(
             init_net=init_net,
             nmixtures=5,
             trainloader=trainloader,
-            init_epochs=1000,
-            sampling_epochs=5,
+            init_epochs=epochs,
+            sampling_epochs=sampling_epochs,
             nsamples=200,
             path_to_checkpoints=checkpoint_path,
         )

@@ -44,13 +44,14 @@ class Dataset(torch.utils.data.Dataset):
     built-in mini-batching, shuffling, etc.
     """
 
-    def __init__(self, X, y, name, normalize=True, astorchtensor=True):
+    def __init__(self, X, y, name, normalize=True, astorchtensor=True, clip_extreme_values=False):
         self.name = name  # name of dataset
         self.X = X
         self.y = y[:, None] if len(y.shape) < 2 else y
 
-        self.normalize = True
-        self.astorchtensor = True
+        self.normalize = normalize
+        self.astorchtensor = astorchtensor
+        self.clip_extreme_values = clip_extreme_values
 
         # store (per feature) normalizing parameters
         self.mux = np.mean(X, axis=0)
@@ -65,8 +66,24 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         X = (self.X[idx] - self.mux) / self.stdx if self.normalize else self.X[idx]
         y = (self.y[idx] - self.muy) / self.stdy if self.normalize else self.y[idx]
+        
+        # protein.txt has some extreme values (>50), even after a standard
+        # normal standardization. This seems like corrupt data. Either way,
+        # it creates such spikes in gradients that all learning ends up in weights
+        # with nan-values. There are many ways to deal with this, e.g. changing
+        # loss function from L2 to L1 (less sensitive to outliers) or using 
+        # Adam optimizer instead of SGD. However, during sampling in SWAG, the 
+        # algorithm uses SGD, thus we should also use SGD. And we should not change
+        # loss function during sampling. Hence, we clip outlier values during
+        # sampling of SWAG and SWAGM.
+        if self.clip_extreme_values and self.normalize:
+            sigmas = 4
+            X = np.where(np.abs(X) > sigmas, np.sign(X)*sigmas, X)
+            y = np.where(np.abs(y) > sigmas, np.sign(y)*sigmas, y)
+
         X = torch.from_numpy(X) if self.astorchtensor else X
         y = torch.from_numpy(y) if self.astorchtensor else y
+
         return X, y
 
 

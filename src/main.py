@@ -187,14 +187,11 @@ def mnd(dataset_path):
     train_elbo = []
     test_elbo = []
     # training loop
-    for epoch in range(epochs):
+    tqdmloop = tqdm.trange(epochs, desc='epoch, loss')
+    for epoch in tqdm.trange(epochs):
         total_epoch_loss_train = train(svi, trainloader, trainloader.batch_size)
         train_elbo.append(-total_epoch_loss_train)
-        if not (epoch % 100):
-            print(
-                "[epoch %03d]  average training loss: %.4f"
-                % (epoch, total_epoch_loss_train)
-            )
+        tqdmloop.set_description(f"{epoch=}, loss={total_epoch_loss_train}")
 
     # do predictions
     Lpi, Upi, mu_posterior, mu_pred = net.monte_carlo_PI(
@@ -314,9 +311,9 @@ dsp, method_num = get_parameters()
 print(f"Echo arguments: {dsp=} {method_num=}")
 
 if method_num == 0:
-    swag(dsp)
+    swagm(dsp)
 elif method_num == 1:
     mnd(dsp)
     pass
 elif method_num == 3:
-    swagm(dsp)
+    swag(dsp)

@@ -77,7 +77,7 @@ class Dataset(torch.utils.data.Dataset):
         # loss function during sampling. Hence, we clip outlier values during
         # sampling of SWAG and SWAGM.
         if self.clip_extreme_values and self.normalize:
-            sigmas = 4
+            sigmas = 3
             X = np.where(np.abs(X) > sigmas, np.sign(X)*sigmas, X)
             y = np.where(np.abs(y) > sigmas, np.sign(y)*sigmas, y)
 

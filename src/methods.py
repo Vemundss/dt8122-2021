@@ -44,7 +44,9 @@ class Dataset(torch.utils.data.Dataset):
     built-in mini-batching, shuffling, etc.
     """
 
-    def __init__(self, X, y, name, normalize=True, astorchtensor=True, clip_extreme_values=False):
+    def __init__(
+        self, X, y, name, normalize=True, astorchtensor=True, clip_extreme_values=False
+    ):
         self.name = name  # name of dataset
         self.X = X
         self.y = y[:, None] if len(y.shape) < 2 else y
@@ -53,9 +55,18 @@ class Dataset(torch.utils.data.Dataset):
         self.astorchtensor = astorchtensor
         self.clip_extreme_values = clip_extreme_values
 
+        if "naval" in name:
+            # hack to include evaluation for 'naval_compressor_decay'
+            # since this dataset contains at index 8 a feature with
+            # zero variance (what a silly feature? no information)...
+            # And because I use standardization per-feature introduces
+            # divide by zero.. Add noise random gaussian noise to this feature
+            #self.X = np.concatenate([X[:, :8], X[:, 9:]], axis=-1)
+            self.X[:,8] = np.random.randn(self.X.shape[0])
+
         # store (per feature) normalizing parameters
-        self.mux = np.mean(X, axis=0)
-        self.stdx = np.std(X, axis=0)
+        self.mux = np.mean(self.X, axis=0)
+        self.stdx = np.std(self.X, axis=0)
 
         self.muy = np.mean(y, axis=0)
         self.stdy = np.std(y, axis=0)
@@ -76,23 +87,23 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         X = (self.X[idx] - self.mux) / self.stdx if self.normalize else self.X[idx]
         y = (self.y[idx] - self.muy) / self.stdy if self.normalize else self.y[idx]
-        
-        #X = (self.X[idx] - self.minx) / self.maxx if self.normalize else self.X[idx]
-        #y = (self.y[idx] - self.miny) / self.maxy if self.normalize else self.y[idx]
-        
+
+        # X = (self.X[idx] - self.minx) / self.maxx if self.normalize else self.X[idx]
+        # y = (self.y[idx] - self.miny) / self.maxy if self.normalize else self.y[idx]
+
         # protein.txt has some extreme values (>50), even after a standard
         # normal standardization. This seems like corrupt data. Either way,
         # it creates such spikes in gradients that all learning ends up in weights
         # with nan-values. There are many ways to deal with this, e.g. changing
-        # loss function from L2 to L1 (less sensitive to outliers) or using 
-        # Adam optimizer instead of SGD. However, during sampling in SWAG, the 
+        # loss function from L2 to L1 (less sensitive to outliers) or using
+        # Adam optimizer instead of SGD. However, during sampling in SWAG, the
         # algorithm uses SGD, thus we should also use SGD. And we should not change
         # loss function during sampling. Hence, we clip outlier values during
         # sampling of SWAG and SWAGM.
         if self.clip_extreme_values and self.normalize:
             sigmas = 3
-            X = np.where(np.abs(X) > sigmas, np.sign(X)*sigmas, X)
-            y = np.where(np.abs(y) > sigmas, np.sign(y)*sigmas, y)
+            X = np.where(np.abs(X) > sigmas, np.sign(X) * sigmas, X)
+            y = np.where(np.abs(y) > sigmas, np.sign(y) * sigmas, y)
 
         X = torch.from_numpy(X) if self.astorchtensor else X
         y = torch.from_numpy(y) if self.astorchtensor else y
